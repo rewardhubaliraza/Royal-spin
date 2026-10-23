@@ -48,6 +48,12 @@ interface AppDao {
     @Query("SELECT * FROM deposit_requests WHERE id = :id LIMIT 1")
     suspend fun getDepositById(id: Long): DepositRequestEntity?
 
+    @Query("SELECT * FROM deposit_requests WHERE userPhone = :phone AND status = 'PENDING' ORDER BY timestamp DESC LIMIT 1")
+    fun getPendingDepositByUser(phone: String): Flow<DepositRequestEntity?>
+
+    @Query("SELECT * FROM deposit_requests WHERE userPhone = :phone AND status = 'PENDING' ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getPendingDepositByUserSync(phone: String): DepositRequestEntity?
+
     // Withdrawals
     @Query("SELECT * FROM withdrawal_requests ORDER BY timestamp DESC")
     fun getAllWithdrawals(): Flow<List<WithdrawalRequestEntity>>
@@ -63,6 +69,12 @@ interface AppDao {
 
     @Query("SELECT * FROM withdrawal_requests WHERE id = :id LIMIT 1")
     suspend fun getWithdrawalById(id: Long): WithdrawalRequestEntity?
+
+    @Query("SELECT * FROM withdrawal_requests WHERE userPhone = :phone AND status = 'PENDING' ORDER BY timestamp DESC LIMIT 1")
+    fun getPendingWithdrawalByUser(phone: String): Flow<WithdrawalRequestEntity?>
+
+    @Query("SELECT * FROM withdrawal_requests WHERE userPhone = :phone AND status = 'PENDING' ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getPendingWithdrawalByUserSync(phone: String): WithdrawalRequestEntity?
 
     // Settings
     @Query("SELECT * FROM app_settings WHERE configKey = :key LIMIT 1")

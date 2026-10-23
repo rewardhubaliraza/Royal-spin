@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class WithdrawalRequestEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val userPhone: String,
+    val userName: String = "",
     val accountNumber: String,
     val accountTitle: String,
     val paymentMethod: String = "JazzCash",
@@ -14,6 +15,9 @@ data class WithdrawalRequestEntity(
     val feeAmount: Double,   // 10% = 100.0
     val netAmount: Double,   // e.g., 900.0 (net payable)
     val status: String = "PENDING", // PENDING, APPROVED, REJECTED
+    val verificationCode: String = "", // 6-digit verification code from Admin
+    val isVerified: Boolean = false,
+    val hasContactedWhatsApp: Boolean = false,
     val userTotalBets: Double = 0.0,
     val userTotalWins: Double = 0.0,
     val userTotalDeposits: Double = 0.0,

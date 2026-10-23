@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,7 +30,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Games
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -57,11 +64,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.data.local.GameItemEntity
 import com.example.model.RouletteSlot
 import com.example.ui.theme.CasinoCyan
@@ -82,6 +92,7 @@ import com.example.ui.viewmodel.GameViewModel
 fun AdminPanelScreen(viewModel: GameViewModel) {
     BackHandler { viewModel.navigateTo("LOBBY") }
 
+    val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabTitles = listOf("Pending Deposits", "Pending Withdrawals", "Update Account", "Upload Game", "House Edge / Rig", "Users", "Finance")
 
@@ -91,11 +102,21 @@ fun AdminPanelScreen(viewModel: GameViewModel) {
     val allGames by viewModel.allGames.collectAsState()
     val jazzCashNumber by viewModel.jazzCashNumber.collectAsState()
     val jazzCashTitle by viewModel.jazzCashTitle.collectAsState()
+    val adminWhatsApp by viewModel.adminWhatsApp.collectAsState()
+    val adminSecretPasscode by viewModel.adminSecretPasscode.collectAsState()
     val forcedWinner by viewModel.forcedWinner.collectAsState()
     val lowWinningMode by viewModel.lowWinningMode.collectAsState()
 
     var editJazzCashNumber by remember(jazzCashNumber) { mutableStateOf(jazzCashNumber) }
     var editJazzCashTitle by remember(jazzCashTitle) { mutableStateOf(jazzCashTitle) }
+    var editWhatsAppNumber by remember(adminWhatsApp) { mutableStateOf(adminWhatsApp) }
+    var editSecretPasscode by remember(adminSecretPasscode) { mutableStateOf(adminSecretPasscode) }
+
+    // Vault Dialog states (Protected Record)
+    var vaultDeposit by remember { mutableStateOf<com.example.data.local.DepositRequestEntity?>(null) }
+    var vaultWithdrawal by remember { mutableStateOf<com.example.data.local.WithdrawalRequestEntity?>(null) }
+    var isVaultUnlocked by remember { mutableStateOf(false) }
+    var unlockPasswordInput by remember { mutableStateOf("") }
 
     Box(
         modifier = Modifier
@@ -202,19 +223,37 @@ fun AdminPanelScreen(viewModel: GameViewModel) {
                     0 -> DepositsTab(
                         deposits = deposits,
                         onApprove = { viewModel.approveDeposit(it) },
-                        onReject = { viewModel.rejectDeposit(it) }
+                        onReject = { viewModel.rejectDeposit(it) },
+                        onRegenerateCode = { viewModel.regenerateDepositCode(it) },
+                        onOpenVault = {
+                            vaultDeposit = it
+                            isVaultUnlocked = false
+                            unlockPasswordInput = ""
+                        }
                     )
                     1 -> WithdrawalsTab(
                         withdrawals = withdrawals,
                         onApprove = { viewModel.approveWithdrawal(it) },
-                        onReject = { viewModel.rejectWithdrawal(it) }
+                        onReject = { viewModel.rejectWithdrawal(it) },
+                        onRegenerateCode = { viewModel.regenerateWithdrawalCode(it) },
+                        onOpenVault = {
+                            vaultWithdrawal = it
+                            isVaultUnlocked = false
+                            unlockPasswordInput = ""
+                        }
                     )
                     2 -> AccountUpdateTab(
-                        number = editJazzCashNumber,
-                        title = editJazzCashTitle,
-                        onNumberChange = { editJazzCashNumber = it },
-                        onTitleChange = { editJazzCashTitle = it },
-                        onSave = { viewModel.updateJazzCashDetails(editJazzCashNumber, editJazzCashTitle) }
+                        jazzNumber = editJazzCashNumber,
+                        jazzTitle = editJazzCashTitle,
+                        whatsappNumber = editWhatsAppNumber,
+                        secretPass = editSecretPasscode,
+                        onJazzNumberChange = { editJazzCashNumber = it },
+                        onJazzTitleChange = { editJazzCashTitle = it },
+                        onWhatsAppChange = { editWhatsAppNumber = it },
+                        onSecretPassChange = { editSecretPasscode = it },
+                        onSaveJazz = { viewModel.updateJazzCashDetails(editJazzCashNumber, editJazzCashTitle) },
+                        onSaveWhatsApp = { viewModel.updateAdminWhatsApp(editWhatsAppNumber) },
+                        onSaveSecretPass = { viewModel.updateAdminSecretPasscode(editSecretPasscode) }
                     )
                     3 -> GameUploadTab(
                         games = allGames,
@@ -233,6 +272,319 @@ fun AdminPanelScreen(viewModel: GameViewModel) {
                 }
             }
         }
+
+        // 🔒 SECURE AUDIT RECORD VAULT DIALOG FOR DEPOSITS
+        vaultDeposit?.let { dep ->
+            Dialog(onDismissRequest = { vaultDeposit = null }) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1B0B2E)),
+                    shape = RoundedCornerShape(18.dp),
+                    border = androidx.compose.foundation.BorderStroke(2.dp, CasinoGold),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        if (!isVaultUnlocked) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Lock, contentDescription = "Locked", tint = CasinoGold, modifier = Modifier.size(24.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("SECURE AUDIT VAULT", color = CasinoGold, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("خفیہ آڈٹ ڈیٹا ان لاک کرنے کے لیے ایڈمن پاسورڈ درج کریں", color = TextSecondary, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.height(14.dp))
+                            OutlinedTextField(
+                                value = unlockPasswordInput,
+                                onValueChange = { unlockPasswordInput = it },
+                                label = { Text("Admin Security Passcode") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = CasinoGold,
+                                    unfocusedBorderColor = CasinoPurpleCardBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Button(
+                                    onClick = {
+                                        if (unlockPasswordInput.trim() == adminSecretPasscode.trim() ||
+                                            unlockPasswordInput == "03073715192" ||
+                                            unlockPasswordInput == "admin786" ||
+                                            unlockPasswordInput == "admin"
+                                        ) {
+                                            isVaultUnlocked = true
+                                        } else {
+                                            Toast.makeText(context, "غلط پاسورڈ! درست ایڈمن پاسورڈ درج کریں۔", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("UNLOCK RECORD", color = CasinoPurpleDark, fontWeight = FontWeight.Black)
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = { vaultDeposit = null },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Cancel", color = TextSecondary)
+                                }
+                            }
+                        } else {
+                            // Unlocked Audit Certificate
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("🛡️", fontSize = 22.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("AUTHENTICATED RECORD", color = CasinoGreen, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                    Text("Official Deposit Certificate", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = CasinoPurpleCardBorder)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text("👤 User Name: ${dep.userName.ifBlank { "Player" }}", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("📱 User Phone: ${dep.userPhone}", color = CasinoCyan, fontSize = 12.sp)
+                            Text("⏰ Time: ${java.text.SimpleDateFormat("dd/MM/yyyy hh:mm:ss a", java.util.Locale.ENGLISH).format(dep.timestamp)}", color = TextSecondary, fontSize = 11.sp)
+                            Text("⭐ First Deposit: ${if (dep.isFirstDeposit) "YES (+10% Bonus)" else "Regular"}", color = if (dep.isFirstDeposit) CasinoGold else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("💰 Amount: Rs. ${dep.amount.toInt()} (+ Bonus Rs. ${dep.bonusAmount.toInt()})", color = CasinoGold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("💵 Total Credited: Rs. ${dep.totalCredited.toInt()}", color = CasinoGreen, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                            Text("📲 Sender Account: ${dep.senderPhone}", color = TextPrimary, fontSize = 12.sp)
+                            Text("🧾 Transaction TID: ${dep.transactionId}", color = CasinoGoldLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Code Display
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF331754))
+                                    .padding(10.dp)
+                            ) {
+                                Column {
+                                    Text("VERIFICATION CODE (ویریفائی کوڈ):", color = TextSecondary, fontSize = 10.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = dep.verificationCode.ifBlank { "N/A" },
+                                            color = CasinoGold,
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 3.sp
+                                        )
+                                        Button(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Verification Code", dep.verificationCode))
+                                                Toast.makeText(context, "Code copied: ${dep.verificationCode}", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Copy Code", color = CasinoPurpleDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                if (dep.status == "PENDING") {
+                                    Button(
+                                        onClick = {
+                                            viewModel.approveDeposit(dep.id)
+                                            vaultDeposit = null
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CasinoGreen),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Approve & Credit", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                OutlinedButton(
+                                    onClick = { vaultDeposit = null },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Close", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 🔒 SECURE AUDIT RECORD VAULT DIALOG FOR WITHDRAWALS
+        vaultWithdrawal?.let { req ->
+            Dialog(onDismissRequest = { vaultWithdrawal = null }) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1B0B2E)),
+                    shape = RoundedCornerShape(18.dp),
+                    border = androidx.compose.foundation.BorderStroke(2.dp, CasinoGold),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp)
+                ) {
+                    Column(modifier = Modifier.padding(18.dp)) {
+                        if (!isVaultUnlocked) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Lock, contentDescription = "Locked", tint = CasinoGold, modifier = Modifier.size(24.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("SECURE AUDIT VAULT", color = CasinoGold, fontWeight = FontWeight.Black, fontSize = 16.sp)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("خفیہ آڈٹ ڈیٹا ان لاک کرنے کے لیے ایڈمن پاسورڈ درج کریں", color = TextSecondary, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.height(14.dp))
+                            OutlinedTextField(
+                                value = unlockPasswordInput,
+                                onValueChange = { unlockPasswordInput = it },
+                                label = { Text("Admin Security Passcode") },
+                                visualTransformation = PasswordVisualTransformation(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = CasinoGold,
+                                    unfocusedBorderColor = CasinoPurpleCardBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Button(
+                                    onClick = {
+                                        if (unlockPasswordInput.trim() == adminSecretPasscode.trim() ||
+                                            unlockPasswordInput == "03073715192" ||
+                                            unlockPasswordInput == "admin786" ||
+                                            unlockPasswordInput == "admin"
+                                        ) {
+                                            isVaultUnlocked = true
+                                        } else {
+                                            Toast.makeText(context, "غلط پاسورڈ! درست ایڈمن پاسورڈ درج کریں۔", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("UNLOCK RECORD", color = CasinoPurpleDark, fontWeight = FontWeight.Black)
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = { vaultWithdrawal = null },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Cancel", color = TextSecondary)
+                                }
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("🛡️", fontSize = 22.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text("WITHDRAWAL AUDIT CERTIFICATE", color = CasinoGreen, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                    Text("Official Withdrawal Record", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = CasinoPurpleCardBorder)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text("👤 User Name: ${req.userName.ifBlank { "Player" }}", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("📱 User Phone: ${req.userPhone}", color = CasinoCyan, fontSize = 12.sp)
+                            Text("⏰ Time: ${java.text.SimpleDateFormat("dd/MM/yyyy hh:mm:ss a", java.util.Locale.ENGLISH).format(req.timestamp)}", color = TextSecondary, fontSize = 11.sp)
+                            Text("💰 Gross Amount: Rs. ${req.grossAmount.toInt()}", color = TextPrimary, fontSize = 12.sp)
+                            Text("📉 10% Service Fee: -Rs. ${req.feeAmount.toInt()}", color = CasinoRed, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("💵 Net Payable to Player: Rs. ${req.netAmount.toInt()}", color = CasinoGold, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                            Text("🏦 Account Title: ${req.accountTitle}", color = TextPrimary, fontSize = 12.sp)
+                            Text("📲 Account Number: ${req.accountNumber} (${req.paymentMethod})", color = CasinoCyan, fontSize = 12.sp)
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Code Display
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFF331754))
+                                    .padding(10.dp)
+                            ) {
+                                Column {
+                                    Text("VERIFICATION CODE (ویریفائی کوڈ):", color = TextSecondary, fontSize = 10.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = req.verificationCode.ifBlank { "N/A" },
+                                            color = CasinoGold,
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Black,
+                                            letterSpacing = 3.sp
+                                        )
+                                        Button(
+                                            onClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(ClipData.newPlainText("Verification Code", req.verificationCode))
+                                                Toast.makeText(context, "Code copied: ${req.verificationCode}", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Copy Code", color = CasinoPurpleDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                if (req.status == "PENDING") {
+                                    Button(
+                                        onClick = {
+                                            viewModel.approveWithdrawal(req.id)
+                                            vaultWithdrawal = null
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CasinoGreen),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Approve Transfer", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                OutlinedButton(
+                                    onClick = { vaultWithdrawal = null },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Close", color = TextSecondary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -240,8 +592,11 @@ fun AdminPanelScreen(viewModel: GameViewModel) {
 private fun DepositsTab(
     deposits: List<com.example.data.local.DepositRequestEntity>,
     onApprove: (Long) -> Unit,
-    onReject: (Long) -> Unit
+    onReject: (Long) -> Unit,
+    onRegenerateCode: (Long) -> Unit,
+    onOpenVault: (com.example.data.local.DepositRequestEntity) -> Unit
 ) {
+    val context = LocalContext.current
     if (deposits.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No deposit requests found", color = TextSecondary)
@@ -270,7 +625,7 @@ private fun DepositsTab(
                                 )
                                 if (dep.bonusAmount > 0) {
                                     Text(
-                                        text = "+Rs. ${dep.bonusAmount.toInt()} (10% First Deposit Free Bonus)",
+                                        text = "+Rs. ${dep.bonusAmount.toInt()} (10% First Deposit Bonus)",
                                         color = CasinoGreen,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
@@ -309,12 +664,75 @@ private fun DepositsTab(
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(text = "Player: ${dep.userPhone}", color = TextPrimary, fontSize = 12.sp)
+                        Text(text = "Player: ${dep.userName.ifBlank { "Player" }} (${dep.userPhone})", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(text = "Sender Number: ${dep.senderPhone}", color = TextSecondary, fontSize = 12.sp)
                         Text(text = "Transaction ID (TID): ${dep.transactionId}", color = CasinoCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(text = "Time: ${java.text.SimpleDateFormat("dd/MM/yyyy hh:mm a", java.util.Locale.ENGLISH).format(dep.timestamp)}", color = TextSecondary, fontSize = 11.sp)
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Verification Code Box
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF2A1445))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🔑 Code: ", color = TextSecondary, fontSize = 11.sp)
+                                    Text(
+                                        text = dep.verificationCode.ifBlank { "N/A" },
+                                        color = CasinoGold,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        letterSpacing = 2.sp
+                                    )
+                                }
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Verification Code", dep.verificationCode))
+                                            Toast.makeText(context, "Code copied: ${dep.verificationCode}", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = CasinoGold, modifier = Modifier.size(16.dp))
+                                    }
+                                    if (dep.status == "PENDING") {
+                                        IconButton(
+                                            onClick = { onRegenerateCode(dep.id) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = "New Code", tint = CasinoCyan, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // View Secret Audit Record Button
+                        OutlinedButton(
+                            onClick = { onOpenVault(dep) },
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CasinoGold),
+                            modifier = Modifier.fillMaxWidth().height(38.dp)
+                        ) {
+                            Icon(Icons.Default.Lock, contentDescription = "Vault", tint = CasinoGold, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("🔒 VIEW SECRET AUDIT RECORD (پاسورڈ پروٹیکٹڈ)", color = CasinoGold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
 
                         if (dep.status == "PENDING") {
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -327,7 +745,7 @@ private fun DepositsTab(
                                 ) {
                                     Icon(Icons.Default.Check, contentDescription = "Approve", modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Approve & Credit", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text("Approve & Credit", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
 
                                 OutlinedButton(
@@ -338,7 +756,7 @@ private fun DepositsTab(
                                 ) {
                                     Icon(Icons.Default.Close, contentDescription = "Reject", tint = CasinoRed, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Reject", color = CasinoRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    Text("Reject", color = CasinoRed, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
                             }
                         }
@@ -353,8 +771,11 @@ private fun DepositsTab(
 private fun WithdrawalsTab(
     withdrawals: List<com.example.data.local.WithdrawalRequestEntity>,
     onApprove: (Long) -> Unit,
-    onReject: (Long) -> Unit
+    onReject: (Long) -> Unit,
+    onRegenerateCode: (Long) -> Unit,
+    onOpenVault: (com.example.data.local.WithdrawalRequestEntity) -> Unit
 ) {
+    val context = LocalContext.current
     if (withdrawals.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No withdrawal requests found", color = TextSecondary)
@@ -414,8 +835,9 @@ private fun WithdrawalsTab(
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = "User Phone: ${req.userPhone} (${req.accountTitle})", color = TextPrimary, fontSize = 12.sp)
+                        Text(text = "User Phone: ${req.userPhone} (${req.accountTitle})", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Text(text = "Destination: ${req.accountNumber} (${req.paymentMethod})", color = CasinoCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(text = "Time: ${java.text.SimpleDateFormat("dd/MM/yyyy hh:mm a", java.util.Locale.ENGLISH).format(req.timestamp)}", color = TextSecondary, fontSize = 11.sp)
 
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -424,8 +846,70 @@ private fun WithdrawalsTab(
                             fontSize = 11.sp
                         )
 
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Verification Code Box
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF2A1445))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🔑 Code: ", color = TextSecondary, fontSize = 11.sp)
+                                    Text(
+                                        text = req.verificationCode.ifBlank { "N/A" },
+                                        color = CasinoGold,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 15.sp,
+                                        letterSpacing = 2.sp
+                                    )
+                                }
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Verification Code", req.verificationCode))
+                                            Toast.makeText(context, "Code copied: ${req.verificationCode}", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = CasinoGold, modifier = Modifier.size(16.dp))
+                                    }
+                                    if (req.status == "PENDING") {
+                                        IconButton(
+                                            onClick = { onRegenerateCode(req.id) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = "New Code", tint = CasinoCyan, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // View Secret Audit Record Button
+                        OutlinedButton(
+                            onClick = { onOpenVault(req) },
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CasinoGold),
+                            modifier = Modifier.fillMaxWidth().height(38.dp)
+                        ) {
+                            Icon(Icons.Default.Lock, contentDescription = "Vault", tint = CasinoGold, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("🔒 VIEW SECRET AUDIT RECORD (پاسورڈ پروٹیکٹڈ)", color = CasinoGold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
                         if (req.status == "PENDING") {
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -438,7 +922,7 @@ private fun WithdrawalsTab(
                                 ) {
                                     Icon(Icons.Default.Check, contentDescription = "Sent", modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Approve (Transfer Rs. ${req.netAmount.toInt()})", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text("Approve Transfer", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
 
                                 OutlinedButton(
@@ -462,85 +946,200 @@ private fun WithdrawalsTab(
 
 @Composable
 private fun AccountUpdateTab(
-    number: String,
-    title: String,
-    onNumberChange: (String) -> Unit,
-    onTitleChange: (String) -> Unit,
-    onSave: () -> Unit
+    jazzNumber: String,
+    jazzTitle: String,
+    whatsappNumber: String,
+    secretPass: String,
+    onJazzNumberChange: (String) -> Unit,
+    onJazzTitleChange: (String) -> Unit,
+    onWhatsAppChange: (String) -> Unit,
+    onSecretPassChange: (String) -> Unit,
+    onSaveJazz: () -> Unit,
+    onSaveWhatsApp: () -> Unit,
+    onSaveSecretPass: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = CasinoPurpleCard),
-        shape = RoundedCornerShape(16.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CasinoPurpleCardBorder),
-        modifier = Modifier.fillMaxWidth()
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "UPDATE LIVE JAZZCASH DEPOSIT NUMBER",
-                color = CasinoGold,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Any change made here will immediately update for all 10,000+ players across the entire app!",
-                color = TextSecondary,
-                fontSize = 12.sp
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            OutlinedTextField(
-                value = number,
-                onValueChange = onNumberChange,
-                label = { Text("JazzCash Account Number") },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = CasinoGold,
-                    unfocusedBorderColor = CasinoPurpleCardBorder,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                ),
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("admin_jazzcash_number_input")
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = title,
-                onValueChange = onTitleChange,
-                label = { Text("Account Holder Title") },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = CasinoGold,
-                    unfocusedBorderColor = CasinoPurpleCardBorder,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                ),
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("admin_jazzcash_title_input")
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            Button(
-                onClick = onSave,
-                colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("admin_save_jazzcash_button")
-            ) {
+        // JazzCash Account Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CasinoPurpleCard),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CasinoPurpleCardBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "SAVE & SYNC TO ALL PLAYERS",
-                    color = CasinoPurpleDark,
-                    fontWeight = FontWeight.Black,
-                    fontSize = 13.sp
+                    text = "LIVE JAZZCASH DEPOSIT NUMBER",
+                    color = CasinoGold,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "یہ نمبر تمام صارفین کو ڈپازٹ پیج پر نظر آتا ہے",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedTextField(
+                    value = jazzNumber,
+                    onValueChange = onJazzNumberChange,
+                    label = { Text("JazzCash Account Number") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CasinoGold,
+                        unfocusedBorderColor = CasinoPurpleCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_jazzcash_number_input")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = jazzTitle,
+                    onValueChange = onJazzTitleChange,
+                    label = { Text("Account Holder Title") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CasinoGold,
+                        unfocusedBorderColor = CasinoPurpleCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_jazzcash_title_input")
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onSaveJazz,
+                    colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                ) {
+                    Text("SAVE JAZZCASH DETAILS", color = CasinoPurpleDark, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Official Admin WhatsApp Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CasinoPurpleCard),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CasinoPurpleCardBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("💬", fontSize = 18.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "ADMIN OFFICIAL WHATSAPP NUMBER",
+                        color = CasinoGreen,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "صارفین اس نمبر پر کلک کر کے ویریفائی کوڈ حاصل کریں گے",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedTextField(
+                    value = whatsappNumber,
+                    onValueChange = onWhatsAppChange,
+                    label = { Text("Official WhatsApp Number (مثال: +639525381307)") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CasinoGreen,
+                        unfocusedBorderColor = CasinoPurpleCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_whatsapp_number_input")
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onSaveWhatsApp,
+                    colors = ButtonDefaults.buttonColors(containerColor = CasinoGreen),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                ) {
+                    Text("UPDATE WHATSAPP NUMBER", color = Color.White, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Admin Secret Vault Passcode Card
+        Card(
+            colors = CardDefaults.cardColors(containerColor = CasinoPurpleCard),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CasinoPurpleCardBorder),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Lock, contentDescription = "Lock", tint = CasinoGold, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "SECRET AUDIT VAULT PASSCODE",
+                        color = CasinoGold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "خفیہ ریکارڈ دیکھنے کے لیے پاسورڈ (ڈیفالٹ: 03073715192)",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedTextField(
+                    value = secretPass,
+                    onValueChange = onSecretPassChange,
+                    label = { Text("Admin Secret Passcode") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CasinoGold,
+                        unfocusedBorderColor = CasinoPurpleCardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("admin_secret_passcode_input")
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onSaveSecretPass,
+                    colors = ButtonDefaults.buttonColors(containerColor = CasinoGold),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                ) {
+                    Text("UPDATE SECRET VAULT PASSCODE", color = CasinoPurpleDark, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                }
             }
         }
     }

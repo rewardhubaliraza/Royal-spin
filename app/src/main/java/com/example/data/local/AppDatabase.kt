@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
         GameHistoryEntity::class,
         GameItemEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -49,6 +49,12 @@ abstract class AppDatabase : RoomDatabase() {
                                     )
                                     dao.insertOrUpdateSetting(
                                         AppSettingsEntity("jazzcash_title", "JazzCash Official Cashier")
+                                    )
+                                    dao.insertOrUpdateSetting(
+                                        AppSettingsEntity("admin_whatsapp", "+639525381307")
+                                    )
+                                    dao.insertOrUpdateSetting(
+                                        AppSettingsEntity("admin_secret_pass", "451040600")
                                     )
                                     dao.insertOrUpdateSetting(
                                         AppSettingsEntity("force_next_result", "AUTO")

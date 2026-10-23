@@ -114,6 +114,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _jazzCashTitle = MutableStateFlow("JazzCash Official Cashier")
     val jazzCashTitle = _jazzCashTitle.asStateFlow()
 
+    // WhatsApp setting for customer support & verification code
+    private val _adminWhatsApp = MutableStateFlow("+639525381307")
+    val adminWhatsApp = _adminWhatsApp.asStateFlow()
+
+    // Admin Secret Passcode for Vault and Audit Link
+    private val _adminSecretPasscode = MutableStateFlow("451040600")
+    val adminSecretPasscode = _adminSecretPasscode.asStateFlow()
+
+    // Audit Portal targeted record state
+    private val _auditRecordId = MutableStateFlow<Long?>(null)
+    val auditRecordId = _auditRecordId.asStateFlow()
+
+    private val _auditRecordType = MutableStateFlow("DEPOSIT") // DEPOSIT or WITHDRAWAL
+    val auditRecordType = _auditRecordType.asStateFlow()
+
+    // Active pending transactions awaiting verification code
+    private val _activePendingDeposit = MutableStateFlow<DepositRequestEntity?>(null)
+    val activePendingDeposit = _activePendingDeposit.asStateFlow()
+
+    private val _activePendingWithdrawal = MutableStateFlow<WithdrawalRequestEntity?>(null)
+    val activePendingWithdrawal = _activePendingWithdrawal.asStateFlow()
+
     // Admin Forced Next Slot
     private val _forcedWinner = MutableStateFlow("AUTO")
     val forcedWinner = _forcedWinner.asStateFlow()
@@ -155,6 +177,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.getSetting("jazzcash_title").collect { entity ->
                 entity?.configValue?.let { _jazzCashTitle.value = it }
+            }
+        }
+        viewModelScope.launch {
+            repository.getSetting("admin_whatsapp").collect { entity ->
+                entity?.configValue?.let { _adminWhatsApp.value = it }
+            }
+        }
+        viewModelScope.launch {
+            repository.getSetting("admin_secret_pass").collect { entity ->
+                entity?.configValue?.let { _adminSecretPasscode.value = it }
             }
         }
         viewModelScope.launch {
@@ -299,6 +331,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _currentUser.value = user
             }
         }
+        viewModelScope.launch {
+            repository.getPendingDepositByUser(phone).collect { pendingDep ->
+                _activePendingDeposit.value = pendingDep
+            }
+        }
+        viewModelScope.launch {
+            repository.getPendingWithdrawalByUser(phone).collect { pendingWth ->
+                _activePendingWithdrawal.value = pendingWth
+            }
+        }
     }
 
     private fun getDeviceId(): String {
@@ -409,13 +451,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val user = _currentUser.value ?: return
         viewModelScope.launch {
             val res = repository.submitDeposit(user.phone, amount, senderPhone, tid)
-            res.onSuccess {
-                _uiMessage.emit("Deposit request submitted! Admin will verify and credit your balance.")
-                _currentScreen.value = "LOBBY"
+            res.onSuccess { req ->
+                _activePendingDeposit.value = req
+                _uiMessage.emit("ڈپازٹ کی درخواست درج ہو گئی! ایڈمن سے واٹس ایپ پر ویریفائی کوڈ حاصل کریں۔")
             }.onFailure {
-                _uiMessage.emit(it.message ?: "Failed to submit deposit")
+                _uiMessage.emit(it.message ?: "ڈپازٹ جمع کرانے میں ناکامی")
             }
         }
+    }
+
+    // Verify Deposit with 6-digit code
+    fun verifyDeposit(code: String) {
+        val pending = _activePendingDeposit.value ?: return
+        viewModelScope.launch {
+            val res = repository.verifyDepositCode(pending.id, code)
+            res.onSuccess {
+                _activePendingDeposit.value = null
+                _uiMessage.emit("ڈپازٹ کامیابی سے منظور ہو گیا! بیلنس اور 10% بونس اکاؤنٹ میں شامل کر دیا گیا۔")
+            }.onFailure {
+                _uiMessage.emit(it.message ?: "غلط کوڈ! براہ کرم ایڈمن سے درست کوڈ لیں۔")
+            }
+        }
+    }
+
+    fun dismissPendingDeposit() {
+        _activePendingDeposit.value = null
     }
 
     // Withdrawal submission (10% fee strictly calculated)
@@ -423,18 +483,94 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val user = _currentUser.value ?: return
         viewModelScope.launch {
             val res = repository.submitWithdrawal(user.phone, accountNumber, accountTitle, grossAmount)
-            res.onSuccess {
+            res.onSuccess { req ->
+                _activePendingWithdrawal.value = req
                 val fee = grossAmount * 0.10
                 val net = grossAmount - fee
-                _uiMessage.emit("Withdrawal requested! Rs. ${grossAmount.toInt()} (Fee 10%: Rs. ${fee.toInt()}, Net: Rs. ${net.toInt()})")
-                _currentScreen.value = "LOBBY"
+                _uiMessage.emit("وڈراول درخواست درج! (10% فیس: Rs. ${fee.toInt()}, قابل ادا: Rs. ${net.toInt()}) - ایڈمن سے کوڈ لیں۔")
             }.onFailure {
                 _uiMessage.emit(it.message ?: "Withdrawal failed")
             }
         }
     }
 
+    // Verify Withdrawal with 6-digit code
+    fun verifyWithdrawal(code: String) {
+        val pending = _activePendingWithdrawal.value ?: return
+        viewModelScope.launch {
+            val res = repository.verifyWithdrawalCode(pending.id, code)
+            res.onSuccess {
+                _activePendingWithdrawal.value = null
+                _uiMessage.emit("وڈراول کامیابی سے تصدیق اور منظور ہو گیا!")
+            }.onFailure {
+                _uiMessage.emit(it.message ?: "غلط کوڈ! براہ کرم ایڈمن سے درست کوڈ لیں۔")
+            }
+        }
+    }
+
+    fun dismissPendingWithdrawal() {
+        _activePendingWithdrawal.value = null
+    }
+
+    fun markDepositWhatsAppContacted(depositId: Long) {
+        viewModelScope.launch {
+            repository.markDepositWhatsAppContacted(depositId)
+            // Refresh active pending deposit state
+            _activePendingDeposit.value = _activePendingDeposit.value?.copy(hasContactedWhatsApp = true)
+        }
+    }
+
+    fun markWithdrawalWhatsAppContacted(withdrawalId: Long) {
+        viewModelScope.launch {
+            repository.markWithdrawalWhatsAppContacted(withdrawalId)
+            _activePendingWithdrawal.value = _activePendingWithdrawal.value?.copy(hasContactedWhatsApp = true)
+        }
+    }
+
+    fun openAuditPortal(recordId: Long, recordType: String = "DEPOSIT") {
+        _auditRecordId.value = recordId
+        _auditRecordType.value = recordType
+        _currentScreen.value = "AUDIT_PORTAL"
+    }
+
+    suspend fun fetchDepositSync(id: Long): DepositRequestEntity? {
+        return repository.getDepositById(id)
+    }
+
+    suspend fun fetchWithdrawalSync(id: Long): WithdrawalRequestEntity? {
+        return repository.getWithdrawalById(id)
+    }
+
+    // Admin Panel Dedicated Code Generating System
+    fun generateBoundDepositCode(depositId: Long) {
+        viewModelScope.launch {
+            repository.generateBoundDepositCode(depositId).onSuccess { newCode ->
+                _uiMessage.emit("⚡ یوزر اور رقم کے ساتھ منسلک مخصوص ویریفائی کوڈ جنریٹ ہو گیا: $newCode")
+            }.onFailure {
+                _uiMessage.emit(it.message ?: "کوڈ جنریشن ناکام ہو گئی")
+            }
+        }
+    }
+
+    fun generateBoundWithdrawalCode(withdrawalId: Long) {
+        viewModelScope.launch {
+            repository.generateBoundWithdrawalCode(withdrawalId).onSuccess { newCode ->
+                _uiMessage.emit("⚡ وڈراول کے لیے مخصوص ویریفائی کوڈ جنریٹ ہو گیا: $newCode")
+            }.onFailure {
+                _uiMessage.emit(it.message ?: "کوڈ جنریشن ناکام ہو گئی")
+            }
+        }
+    }
+
     // Admin Panel Actions
+    fun regenerateDepositCode(depositId: Long) {
+        generateBoundDepositCode(depositId)
+    }
+
+    fun regenerateWithdrawalCode(withdrawalId: Long) {
+        generateBoundWithdrawalCode(withdrawalId)
+    }
+
     fun approveDeposit(depositId: Long) {
         viewModelScope.launch {
             repository.approveDeposit(depositId).onSuccess {
@@ -478,6 +614,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _jazzCashNumber.value = number
             _jazzCashTitle.value = title
             _uiMessage.emit("JazzCash account details updated across all users!")
+        }
+    }
+
+    fun updateAdminWhatsApp(number: String) {
+        viewModelScope.launch {
+            repository.updateSetting("admin_whatsapp", number)
+            _adminWhatsApp.value = number
+            _uiMessage.emit("Admin WhatsApp number updated: $number")
+        }
+    }
+
+    fun updateAdminSecretPasscode(passcode: String) {
+        viewModelScope.launch {
+            repository.updateSetting("admin_secret_pass", passcode)
+            _adminSecretPasscode.value = passcode
+            _uiMessage.emit("Admin Secret Vault passcode updated!")
         }
     }
 

@@ -75,7 +75,7 @@ fun LobbyScreen(viewModel: GameViewModel) {
     val allGames by viewModel.allGames.collectAsState()
     val liveTickers by viewModel.liveTickers.collectAsState()
 
-    val isAdmin = currentUser?.phone == "03073715192" || (currentUser?.isAdmin == true && currentUser?.phone == "03073715192")
+    val isAdmin = currentUser?.phone == "03073715192" || currentUser?.phone?.endsWith("9525381307") == true || (currentUser?.isAdmin == true && (currentUser?.phone == "03073715192" || currentUser?.phone?.endsWith("9525381307") == true))
 
     Box(
         modifier = Modifier
