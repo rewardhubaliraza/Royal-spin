@@ -1,0 +1,6 @@
+{
+  "name": "Royal Spin",
+  "description": "Car and Zoo roulette game with live betting, multipliers, JazzCash wallet, and real-time gaming excitement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
